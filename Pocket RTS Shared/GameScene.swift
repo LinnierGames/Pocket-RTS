@@ -8,136 +8,359 @@
 import SpriteKit
 
 class GameScene: SKScene {
-    
-    
-    fileprivate var label : SKLabelNode?
-    fileprivate var spinnyNode : SKShapeNode?
-
-    
     class func newGameScene() -> GameScene {
-        // Load 'GameScene.sks' as an SKScene.
         guard let scene = SKScene(fileNamed: "GameScene") as? GameScene else {
             print("Failed to load GameScene.sks")
             abort()
         }
-        
-        // Set the scale mode to scale to fit the window
+
         scene.scaleMode = .aspectFill
         
         return scene
     }
     
-    func setUpScene() {
-        // Get label node from scene and store it for use later
-        self.label = self.childNode(withName: "//helloLabel") as? SKLabelNode
-        if let label = self.label {
-            label.alpha = 0.0
-            label.run(SKAction.fadeIn(withDuration: 2.0))
-        }
-        
-        // Create shape node to use during mouse interaction
-        let w = (self.size.width + self.size.height) * 0.05
-        self.spinnyNode = SKShapeNode.init(rectOf: CGSize.init(width: w, height: w), cornerRadius: w * 0.3)
-        
-        if let spinnyNode = self.spinnyNode {
-            spinnyNode.lineWidth = 4.0
-            spinnyNode.run(SKAction.repeatForever(SKAction.rotate(byAngle: CGFloat(Double.pi), duration: 1)))
-            spinnyNode.run(SKAction.sequence([SKAction.wait(forDuration: 0.5),
-                                              SKAction.fadeOut(withDuration: 0.5),
-                                              SKAction.removeFromParent()]))
-            
-            #if os(watchOS)
-                // For watch we just periodically create one of these and let it spin
-                // For other platforms we let user touch/mouse events create these
-                spinnyNode.position = CGPoint(x: 0.0, y: 0.0)
-                spinnyNode.strokeColor = SKColor.red
-                self.run(SKAction.repeatForever(SKAction.sequence([SKAction.wait(forDuration: 2.0),
-                                                                   SKAction.run({
-                                                                       let n = spinnyNode.copy() as! SKShapeNode
-                                                                       self.addChild(n)
-                                                                   })])))
-            #endif
-        }
-    }
+    private var labelResources: SKLabelNode!
+    private var labelStoneWorkers: SKLabelNode!
+    private var labelGoldWorkers: SKLabelNode!
+    private var labelWoodWorkers: SKLabelNode!
+    private var base: SKSpriteNode!
+    private var buttonStone: SKButton!
+    private var buttonGold: SKButton!
+    private var buttonWood: SKButton!
+    private var buttonWorker: SKButton!
+    private var buttonBarracks: SKButton!
+    private var buttonSoldier: SKButton!
+    private var buttonDefend: SKButton!
+    private var buttonAttack: SKButton!
+
+    private var stoneWorkers = 0
+    private var goldWorkers = 0
+    private var woodWorkers = 0
+
+    private var stone = 11110
+    private var gold = 11110
+    private var wood = 11110
     
-    #if os(watchOS)
-    override func sceneDidLoad() {
-        self.setUpScene()
-    }
-    #else
     override func didMove(to view: SKView) {
-        self.setUpScene()
-    }
-    #endif
+        labelResources = childNode(withName: "lab_resources")! as! SKLabelNode
+        labelStoneWorkers = childNode(withName: "lab_stone")! as! SKLabelNode
+        labelGoldWorkers = childNode(withName: "lab_gold")! as! SKLabelNode
+        labelWoodWorkers = childNode(withName: "lab_wood")! as! SKLabelNode
+        base = childNode(withName: "base")! as! SKSpriteNode
+        buttonStone = childNode(withName: "butt_stone")! as! SKButton
+        buttonGold = childNode(withName: "butt_gold")! as! SKButton
+        buttonWood = childNode(withName: "butt_wood")! as! SKButton
+        buttonWorker = childNode(withName: "butt_worker")! as! SKButton
+        buttonBarracks = childNode(withName: "butt_barracks")! as! SKButton
+        buttonSoldier = childNode(withName: "butt_soldier")! as! SKButton
+        buttonDefend = childNode(withName: "butt_defend")! as! SKButton
+        buttonAttack = childNode(withName: "butt_attack")! as! SKButton
 
-    func makeSpinny(at pos: CGPoint, color: SKColor) {
-        if let spinny = self.spinnyNode?.copy() as! SKShapeNode? {
-            spinny.position = pos
-            spinny.strokeColor = color
-            self.addChild(spinny)
+        buttonWorker.touchUpInside = {
+            let worker = Worker(imageNamed: "worker")
+            worker.name = "worker"
+            worker.position = self.base.position
+            worker.position.y += self.base.size.height + .random(in: 0...32)
+            let baseWidth = self.base.size.width / 2
+            worker.position.x += .random(in: -baseWidth...baseWidth)
+            self.addChild(worker)
         }
-    }
-    
-    override func update(_ currentTime: TimeInterval) {
-        // Called before each frame is rendered
-    }
-}
+        
+        buttonStone.touchUpInside = {
+            self.findAndAssignWorker(to: .mineStone)
+        }
+        buttonGold.touchUpInside = {
+            self.findAndAssignWorker(to: .mineGold)
+        }
+        buttonWood.touchUpInside = {
+            self.findAndAssignWorker(to: .chopWood)
+        }
+        
+        buttonBarracks.touchUpInside = {
+            guard self.canAffordBarracks() else { return self.displayMessage("Missing resources!") }
 
-#if os(iOS) || os(tvOS)
-// Touch-based event handling
-extension GameScene {
+            let nBarracks = self.count(ofNodeNames: "barracks")
+            guard nBarracks < 3 else { return self.displayMessage("Can't build more!") }
+
+            let barracks = Barracks(imageNamed: "barracks")
+            barracks.name = "barracks"
+            barracks.position = CGPoint(x: self.base.position.x - 50, y: self.base.position.y + 200)
+            barracks.position.x += CGFloat(nBarracks) * 8
+            barracks.position.y -= CGFloat(nBarracks) * 8
+            self.addChild(barracks)
+            
+            self.buyBarracks()
+        }
+        
+        buttonSoldier.touchUpInside = {
+            guard self.count(ofNodeNames: "barracks") != 0, self.canAffordSoldier() else {
+                self.displayMessage("Missing Resources!")
+                return
+            }
+            
+            self.enumerateChildNodes(withName: "barracks") { node, stop in
+                guard let barracks = node as? Barracks else { return }
+                
+                guard self.canAffordSoldier() else {
+                    stop.initialize(to: true)
+                    return
+                }
+                
+                if barracks.trainSoldier() {
+                    self.buySoldier()
+                }
+            }
+        }
+        
+        buttonDefend.touchUpInside = {
+            var nDefendingSoldiers = self.count(ofNodeNames: "soldier") { (soldier: Soldier) in
+                soldier.state == .defending
+            }
+            
+            self.enumerateChildNodes(withName: "soldier") { node, _ in
+                guard let soldier = node as? Soldier, soldier.state == .idle else { return }
+
+                let destination = self.defendingPosition(index: nDefendingSoldiers)
+                soldier.state = .defending
+                soldier.run(.move(to: destination, duration: 5))
+
+                nDefendingSoldiers += 1
+            }
+        }
+
+        buttonAttack.touchUpInside = {
+            self.enumerateChildNodes(withName: "soldier") { node, _ in
+                guard let soldier = node as? Soldier, soldier.state == .defending else { return }
+
+                let opponent = self.childNode(withName: "opponent")!
+                let randomPosition = CGFloat.random(in: 0...opponent.frame.size.width)
+                let destination = CGPoint(x: opponent.frame.origin.x + randomPosition, y: opponent.frame.origin.y - soldier.size.height / 2)
+
+                soldier.state = .marching
+                soldier.run(.move(to: destination, duration: 2))
+            }
+        }
+        
+        // Game tick
+        run(.repeatForever(.sequence([.run(updateGameTick), .wait(forDuration: 5)])), withKey: "game_tick")
+    }
+
+    private func defendingPosition(index: Int) -> CGPoint {
+        let soldier = SKTexture(imageNamed: "soldier")
+
+        let horizontalPadding: CGFloat = 8
+        let verticalPadding: CGFloat = 8
+        let rowHeight: CGFloat = soldier.size().height + verticalPadding
+        let columnWidth: CGFloat = soldier.size().width + horizontalPadding
+        let defendingRect = CGRect(x: 32, y: 500, width: size.width - (32 * 2), height: rowHeight * 3)
+        let maxSoldierColumnCount = Int((defendingRect.width / columnWidth))
+        let row = Int(CGFloat(index) / CGFloat(maxSoldierColumnCount))
+        let column = index % maxSoldierColumnCount
+
+        var center = defendingRect
+        center.origin.x = size.width / 2 - (CGFloat(maxSoldierColumnCount) * columnWidth) / 2 + horizontalPadding
+        let destinationOrigin = center.origin
+
+        return CGPoint(
+            x: destinationOrigin.x + CGFloat(column) * columnWidth + soldier.size().width / 2,
+            y: destinationOrigin.y + CGFloat(row) * rowHeight + soldier.size().height / 2
+        )
+    }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if let label = self.label {
-            label.run(SKAction.init(named: "Pulse")!, withKey: "fadeInOut")
+        guard let touch = touches.first else { return }
+
+        let location = touch.location(in: self)
+        let node = atPoint(location)
+
+        if let button = node as? SKButton {
+            button.touchUpInside()
+        }
+    }
+
+    private func displayMessage(_ message: String) {
+        let label = SKLabelNode(text: message)
+        label.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        addChild(label)
+        label.run(.sequence([
+            .group([.moveBy(x: 0, y: 50, duration: 2),.fadeOut(withDuration: 2)]),
+            .removeFromParent(),
+        ]))
+    }
+    
+    private func canAffordBarracks() -> Bool {
+        stone >= 10 && wood >= 10 && gold >= 20
+    }
+    private func buyBarracks() {
+        stone -= 10
+        wood -= 10
+        gold -= 20
+        updateUI()
+    }
+    
+    private func canAffordSoldier() -> Bool {
+        stone >= 5 && wood >= 5 && gold >= 30
+    }
+    private func buySoldier() {
+        stone -= 5
+        wood -= 5
+        gold -= 30
+        updateUI()
+    }
+    
+    private func updateUI() {
+        labelResources.text = "S: \(stone) G: \(gold) W: \(wood)"
+    }
+    
+    private func updateGameTick() {
+        stone += stoneWorkers
+        gold += goldWorkers
+        wood += woodWorkers
+        updateUI()
+    }
+    
+    private func findAndAssignWorker(to newJob: Job) {
+        var foundWorker: Worker?
+        
+        enumerateChildNodes(withName: "worker") { workerNode, stop in
+            guard let worker = workerNode as? Worker else { return }
+            
+            if worker.job == .idle {
+                foundWorker = worker
+                stop.initialize(to: true)
+            }
         }
         
-        for t in touches {
-            self.makeSpinny(at: t.location(in: self), color: SKColor.green)
+        guard let worker = foundWorker else { return }
+        worker.job = newJob
+        let jobPosition = point(for: newJob)
+        
+        // Move and assign the worker
+        worker.run(
+            .sequence([
+                .move(to: jobPosition, duration: 2),
+                .run { self.incrementJobCount(newJob) },
+            ])
+        )
+    }
+    
+    private func incrementJobCount(_ job: Job) {
+        switch job {
+        case .idle:
+            break
+        case .mineStone:
+            stoneWorkers += 1
+            labelStoneWorkers.text = String(stoneWorkers)
+        case .mineGold:
+            goldWorkers += 1
+            labelGoldWorkers.text = String(goldWorkers)
+        case .chopWood:
+            woodWorkers += 1
+            labelWoodWorkers.text = String(woodWorkers)
         }
     }
     
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for t in touches {
-            self.makeSpinny(at: t.location(in: self), color: SKColor.blue)
+    private func point(for job: Job) -> CGPoint {
+        switch job {
+        case .idle:
+            return base.position
+        case .mineGold:
+            return buttonGold.position
+        case .mineStone:
+            return buttonStone.position
+        case .chopWood:
+            return buttonWood.position
         }
     }
-    
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for t in touches {
-            self.makeSpinny(at: t.location(in: self), color: SKColor.red)
-        }
-    }
-    
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for t in touches {
-            self.makeSpinny(at: t.location(in: self), color: SKColor.red)
-        }
-    }
-    
-   
 }
-#endif
 
-#if os(OSX)
-// Mouse-based event handling
-extension GameScene {
 
-    override func mouseDown(with event: NSEvent) {
-        if let label = self.label {
-            label.run(SKAction.init(named: "Pulse")!, withKey: "fadeInOut")
-        }
-        self.makeSpinny(at: event.location(in: self), color: SKColor.green)
-    }
-    
-    override func mouseDragged(with event: NSEvent) {
-        self.makeSpinny(at: event.location(in: self), color: SKColor.blue)
-    }
-    
-    override func mouseUp(with event: NSEvent) {
-        self.makeSpinny(at: event.location(in: self), color: SKColor.red)
-    }
-
+class SKButton: SKSpriteNode {
+    var touchUpInside: () -> Void = {}
 }
-#endif
 
+enum Job {
+    case idle
+    case mineGold
+    case mineStone
+    case chopWood
+}
+
+class Worker: SKSpriteNode {
+    var job = Job.idle
+}
+
+class Barracks: SKSpriteNode {
+    private static let trainingDuration: TimeInterval = 1
+    private var isTraining = false
+    
+    func trainSoldier() -> Bool {
+        guard !isTraining else { return false }
+        
+        let counter = SKLabelNode(text: String(Int(Self.trainingDuration)))
+        counter.position = .zero
+        counter.position.y += 8
+        addChild(counter)
+        
+        isTraining = true
+        run(
+            .sequence([
+                .repeat(
+                    .sequence([.wait(forDuration: 1), .run { self.progressTraining(counter: counter) }]),
+                    count: Int(Self.trainingDuration)
+                ),
+                .run { counter.removeFromParent(); self.isTraining = false },
+            ])
+        )
+        
+        return true
+    }
+    
+    private func progressTraining(counter: SKLabelNode) {
+        let remainingTrainingDuration = Int(Float(counter.text!)!) - 1
+        
+        counter.text = String(remainingTrainingDuration)
+        
+        if remainingTrainingDuration == 0 {
+            let solider = Soldier(imageNamed: "soldier")
+            solider.name = "soldier"
+            
+            solider.position = self.position
+            solider.position.y += self.size.height + .random(in: 0...16)
+            let barracksWidth = self.size.width / 2
+            solider.position.x += .random(in: -barracksWidth...barracksWidth)
+            scene!.addChild(solider)
+        }
+    }
+}
+
+class Soldier: SKSpriteNode {
+    enum State {
+        case idle
+        case defending
+        case marching
+        case attacking
+    }
+    var state = State.idle
+}
+
+extension SKNode {
+    func count(ofNodeNames name: String) -> Int {
+        var count = 0
+        enumerateChildNodes(withName: name) { node, _ in
+            count += 1
+        }
+
+        return count
+    }
+
+    func count<T>(ofNodeNames name: String, condition: @escaping (T) -> Bool = { _ in true }) -> Int {
+        var count = 0
+        enumerateChildNodes(withName: name) { node, _ in
+            guard let tNode = node as? T, condition(tNode) else { return }
+            count += 1
+        }
+        
+        return count
+    }
+}
