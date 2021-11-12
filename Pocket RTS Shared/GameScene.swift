@@ -24,6 +24,7 @@ class GameScene: SKScene {
     private var labelGoldWorkers: SKLabelNode!
     private var labelWoodWorkers: SKLabelNode!
     private var base: SKSpriteNode!
+    private var labelOpponentHP: SKLabelNode!
     private var buttonStone: SKButton!
     private var buttonGold: SKButton!
     private var buttonWood: SKButton!
@@ -37,9 +38,11 @@ class GameScene: SKScene {
     private var goldWorkers = 0
     private var woodWorkers = 0
 
-    private var stone = 11110
-    private var gold = 11110
-    private var wood = 11110
+    private var stone = 1110
+    private var gold = 1110
+    private var wood = 1110
+    
+    private var opponentHP = 200
     
     override func didMove(to view: SKView) {
         labelResources = childNode(withName: "lab_resources")! as! SKLabelNode
@@ -47,6 +50,7 @@ class GameScene: SKScene {
         labelGoldWorkers = childNode(withName: "lab_gold")! as! SKLabelNode
         labelWoodWorkers = childNode(withName: "lab_wood")! as! SKLabelNode
         base = childNode(withName: "base")! as! SKSpriteNode
+        labelOpponentHP = childNode(withName: "lab_opponent_hp")! as! SKLabelNode
         buttonStone = childNode(withName: "butt_stone")! as! SKButton
         buttonGold = childNode(withName: "butt_gold")! as! SKButton
         buttonWood = childNode(withName: "butt_wood")! as! SKButton
@@ -121,8 +125,10 @@ class GameScene: SKScene {
                 guard let soldier = node as? Soldier, soldier.state == .idle else { return }
 
                 let destination = self.defendingPosition(index: nDefendingSoldiers)
-                soldier.state = .defending
-                soldier.run(.move(to: destination, duration: 5))
+                soldier.run(.sequence([
+                    .move(to: destination, duration: 1),
+                    .run { soldier.state = .defending },
+                ]))
 
                 nDefendingSoldiers += 1
             }
@@ -134,15 +140,27 @@ class GameScene: SKScene {
 
                 let opponent = self.childNode(withName: "opponent")!
                 let randomPosition = CGFloat.random(in: 0...opponent.frame.size.width)
-                let destination = CGPoint(x: opponent.frame.origin.x + randomPosition, y: opponent.frame.origin.y - soldier.size.height / 2)
+                let destination = CGPoint(
+                    x: opponent.frame.minX + randomPosition,
+                    y: opponent.frame.minY - soldier.size.height / 2
+                )
 
                 soldier.state = .marching
-                soldier.run(.move(to: destination, duration: 2))
+                soldier.run(.sequence([
+                    .move(to: destination, duration: 1),
+                    .run { soldier.state = .attacking },
+                    .run { soldier.attack(applyDamange: self.applyDamageToOpponent) },
+                ]))
             }
         }
         
         // Game tick
         run(.repeatForever(.sequence([.run(updateGameTick), .wait(forDuration: 5)])), withKey: "game_tick")
+    }
+    
+    private func applyDamageToOpponent(_ damage: Int) {
+        opponentHP -= damage
+        updateUI()
     }
 
     private func defendingPosition(index: Int) -> CGPoint {
@@ -169,8 +187,12 @@ class GameScene: SKScene {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first else { return }
-
         let location = touch.location(in: self)
+
+        buttonTap(at: location)
+    }
+    
+    private func buttonTap(at location: CGPoint) {
         let node = atPoint(location)
 
         if let button = node as? SKButton {
@@ -210,6 +232,7 @@ class GameScene: SKScene {
     
     private func updateUI() {
         labelResources.text = "S: \(stone) G: \(gold) W: \(wood)"
+        labelOpponentHP.text = String(opponentHP)
     }
     
     private func updateGameTick() {
@@ -279,6 +302,10 @@ class SKButton: SKSpriteNode {
     var touchUpInside: () -> Void = {}
 }
 
+class SKButtonLabel: SKLabelNode {
+    var touchUpInside: () -> Void = {}
+}
+
 enum Job {
     case idle
     case mineGold
@@ -342,6 +369,22 @@ class Soldier: SKSpriteNode {
         case attacking
     }
     var state = State.idle
+    
+    func attack(applyDamange: @escaping (Int) -> Void) {
+        guard state == .attacking else { return }
+        
+        let attackPath = UIBezierPath()
+        attackPath.move(to: .zero)
+        attackPath.addLine(to: CGPoint(x: 0, y: -5))
+        attackPath.addLine(to: CGPoint(x: 0, y: 10))
+        attackPath.addLine(to: .zero)
+
+        run(.repeatForever(.sequence([
+            .wait(forDuration: 0.5 + .random(in: 0...1)),
+            .follow(attackPath.cgPath, asOffset: true, orientToPath: false, duration: 1),
+            .run { applyDamange(5) },
+        ])), withKey: "attacking")
+    }
 }
 
 extension SKNode {
